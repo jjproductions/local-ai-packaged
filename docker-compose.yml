@@ -14,6 +14,8 @@ volumes:
   langfuse_clickhouse_data:
   langfuse_clickhouse_logs:
   langfuse_minio_data:
+  unstructured-data:
+
 
 x-n8n: &service-n8n
   image: n8nio/n8n:latest
@@ -356,6 +358,21 @@ services:
         max-size: "1m"
         max-file: "1"
 
+  unstructured:
+    image: downloads.unstructured.io/unstructured-io/unstructured:latest
+    platform: linux/arm64
+    container_name: unstructured
+    restart: unless-stopped
+    tty: true
+    ports:
+      - "8010:8000" # Access Unstructured API at http://localhost:8000
+    # environment:
+      # Optional: set log level or other variables
+      # LOG_LEVEL: "DEBUG"
+    volumes:
+      # Uncomment if you want to persist data or mount files
+      - ./unstructured-data:/var/lib/unstructured/data
+
   ollama-cpu:
     profiles: ["cpu"]
     <<: *service-ollama
@@ -371,6 +388,13 @@ services:
               count: 1
               capabilities: [gpu]
 
+  
+  ollama-pull-llama-cpu:
+    profiles: ["cpu"]
+    <<: *init-ollama
+    depends_on:
+      - ollama-cpu
+
   ollama-gpu-amd:
     profiles: ["gpu-amd"]
     <<: *service-ollama
@@ -378,12 +402,6 @@ services:
     devices:
       - "/dev/kfd"
       - "/dev/dri"
-
-  ollama-pull-llama-cpu:
-    profiles: ["cpu"]
-    <<: *init-ollama
-    depends_on:
-      - ollama-cpu
 
   ollama-pull-llama-gpu:
     profiles: ["gpu-nvidia"]
