@@ -14,6 +14,7 @@ volumes:
   langfuse_clickhouse_data:
   langfuse_clickhouse_logs:
   langfuse_minio_data:
+  unstract-data:
   unstructured-data:
 
 
@@ -357,6 +358,53 @@ services:
       options:
         max-size: "1m"
         max-file: "1"
+
+  unstract:
+    image: unstract/backend:latest
+    container_name: unstract
+    restart: unless-stopped
+    ports:
+      - "8020:8000" # Access Unstract API at http://localhost:8020
+    tty: true
+    # Add environment variables or volumes here if needed
+    environment:
+    # - UNSTRACT_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
+    - DB_NAME=postgres
+    - DB_USER=postgres
+    - DB_HOST=postgres
+    - DB_PASSWORD=${POSTGRES_PASSWORD}
+    - DB_PORT=5432
+    - DB_SCHEMA=public
+    - UNSTRACT_SECRET_KEY=xy*1J3B7
+    - UNSTRACT_ALLOWED_ORIGINS=*
+    - UNSTRACT_LOG_LEVEL=INFO
+    - CELERY_BROKER_BASE_URL=redis://redis:6379/0
+    - INDEXING_FLAG_TTL=1800
+    - CELERY_BROKER_USER=guest
+    - CELERY_BROKER_PASS=guest
+    - STRUCTURE_TOOL_IMAGE_URL=downloads.unstructured.io/unstructured-io/unstructured:latest
+    - STRUCTURE_TOOL_IMAGE_NAME=unstructured
+    - STRUCTURE_TOOL_IMAGE_TAG=latest
+    - SYSTEM_ADMIN_USERNAME=admin
+    - SYSTEM_ADMIN_PASSWORD=adminpassword
+    - SYSTEM_ADMIN_EMAIL=admin@example.com
+    - ENABLE_LOG_HISTORY=True
+    - DJANGO_SECRET_KEY=l5y5FkZ_WmmzhCzMBF_ZxW4ioYCGrVqM9aS6IE-_KIvHgUMSvCe7YTlsq2pObCrOk8o
+    - ENCRYPTION_KEY=ih6rnPiaTU3f4VZ3Wl0CBdfyx2CJKWqilqPu8ySpMQs=
+    volumes:
+      - ./unstract-data:/var/lib/unstract/data
+
+  unstract-frontend:
+    image: unstract/frontend:latest
+    container_name: unstract-frontend
+    restart: unless-stopped
+    ports:
+      - "8021:80" # Access Unstract Frontend at http://localhost:8021
+    depends_on:
+      - unstract
+    # Add environment variables or volumes here if needed
+    environment:
+      - VITE_UNSTRACT_API_URL=http://localhost:8020
 
   unstructured:
     image: downloads.unstructured.io/unstructured-io/unstructured:latest
