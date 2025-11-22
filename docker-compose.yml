@@ -19,7 +19,8 @@ volumes:
 
 
 x-n8n: &service-n8n
-  image: n8nio/n8n:latest
+# prior versions: 1.108.2
+  image: n8nio/n8n:1.120.3
   environment:
     - DB_TYPE=postgresdb
     - DB_POSTGRESDB_HOST=db
@@ -104,7 +105,8 @@ services:
     volumes:
       - n8n_storage:/home/node/.n8n
       - ./n8n/backup:/backup
-      - ./shared:/data/shared
+      - ./shared:/data/
+      - ./n8n/iom/expenses:/data/iom/expenses
     depends_on:
       n8n-import:
         condition: service_completed_successfully
