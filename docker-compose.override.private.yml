@@ -1,7 +1,7 @@
 services:
-  flowise:
-    ports:
-      - 127.0.0.1:3001:3001
+  # flowise:
+  #   ports:
+  #     - 127.0.0.1:3001:3001
 
   open-webui:
     ports:
@@ -52,6 +52,14 @@ services:
   searxng:
     ports:
       - 127.0.0.1:8081:8080
+
+  static-files:
+    ports:
+      - 127.0.0.1:8082:80
+      
+  docling:
+    ports:
+      - 127.0.0.1:5001:5001
 
   ollama-cpu:
     ports:

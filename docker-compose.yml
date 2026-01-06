@@ -14,6 +14,7 @@ volumes:
   langfuse_clickhouse_data:
   langfuse_clickhouse_logs:
   langfuse_minio_data:
+  docling_data:
   # unstract-data:
   # unstructured-data:
 
@@ -31,7 +32,9 @@ x-n8n: &service-n8n
     - N8N_PERSONALIZATION_ENABLED=false
     - N8N_ENCRYPTION_KEY
     - N8N_USER_MANAGEMENT_JWT_SECRET
-    - WEBHOOK_URL=${N8N_HOSTNAME:+https://}${N8N_HOSTNAME:-http://localhost:5678}
+    - WEBHOOK_URL=${N8N_HOSTNAME}
+    - N8N_EDITOR_BASE_URL=${N8N_HOSTNAME}
+    - N8N_PROXY_HOPS=1
     - OLLAMA_HOST=host.docker.internal:11434
     
 x-ollama: &service-ollama
@@ -58,25 +61,68 @@ x-init-ollama: &init-ollama
     - "-c"
     - "sleep 3; OLLAMA_HOST=ollama:11434 ollama pull qwen2.5:7b-instruct-q4_K_M; OLLAMA_HOST=ollama:11434 ollama pull nomic-embed-text"
 
+# ===========================================
+# Docling Base Configuration (YAML Anchor)
+# Docs: https://github.com/docling-project/docling-serve
+# ===========================================
+x-docling: &service-docling
+  image: ghcr.io/docling-project/docling-serve:main
+  container_name: docling
+  # networks: ['demo']. (NOT REQUIRED UNLESS USING CUSTOM NETWORK)
+  restart: unless-stopped
+  # Run as root to fix bind mount permissions on Windows
+  # user: root. (NOT NEEDED WITH MAC/LINUX)
+  # Override working directory so referenced images are saved to shared folder
+  working_dir: /shared/docling-scratch
+  expose:
+    - 5001/tcp
+  environment:
+    - DOCLING_SERVE_ENABLE_UI=true
+    # Store extracted images in shared folder accessible by other services
+    - DOCLING_SERVE_SCRATCH_PATH=/shared/docling-scratch
+    # Keep results after retrieval so other services can access them
+    - DOCLING_SERVE_SINGLE_USE_RESULTS=false
+    # Gradio security: allow writing to /shared directory
+    - GRADIO_ALLOWED_PATHS=/shared
+    - GRADIO_TEMP_DIR=/shared/docling-scratch
+    - DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true
+    - OMP_NUM_THREADS=2
+    - DOCLING_NUM_THREADS=2
+  mem_limit: 12g
+  volumes:
+    - docling_data:/data
+    - ./shared:/shared
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+    interval: 120s
+    timeout: 10s
+    retries: 3
+    start_period: 60s
+
 services:
-  flowise:
-    image: flowiseai/flowise
-    restart: unless-stopped
-    container_name: flowise
-    expose:
-      - 3001/tcp
-    environment:
-        - PORT=3001
-        - FLOWISE_USERNAME=${FLOWISE_USERNAME}
-        - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-        - ~/.flowise:/root/.flowise
-    entrypoint: /bin/sh -c "sleep 3; flowise start"
+  #==========================================
+    # Flowise Service (COMMENTED OUT - OPTIONAL)
+    # Docs: https://flowiseai.com/docs/getting-started/installation
+    
+    # flowise:
+    #   image: flowiseai/flowise
+    #   restart: unless-stopped
+    #   container_name: flowise
+    #   expose:
+    #     - 3001/tcp
+    #   environment:
+    #       - PORT=3001
+    #       - FLOWISE_USERNAME=${FLOWISE_USERNAME}
+    #       - FLOWISE_PASSWORD=${FLOWISE_PASSWORD}
+    #   extra_hosts:
+    #     - "host.docker.internal:host-gateway"
+    #   volumes:
+    #       - ~/.flowise:/root/.flowise
+    #   entrypoint: /bin/sh -c "sleep 3; flowise start"
+  #==========================================
 
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:0.6.43
     restart: unless-stopped
     container_name: open-webui
     expose:
@@ -106,7 +152,7 @@ services:
       - n8n_storage:/home/node/.n8n
       - ./n8n/backup:/backup
       - ./shared:/data/
-      - ./shared/iom/expenses:/data/iom/expenses
+      # - ./shared/iom/expenses:/data/iom/expenses
     depends_on:
       n8n-import:
         condition: service_completed_successfully
@@ -340,7 +386,6 @@ services:
       timeout: 10s
       retries: 10
 
-
   searxng:
     container_name: searxng
     image: docker.io/searxng/searxng:latest
@@ -365,68 +410,100 @@ services:
         max-size: "1m"
         max-file: "1"
 
+# ===========================================
+  # Static File Server - Serves shared folder
+  # ===========================================
+  # Access files at http://localhost:8082/
+  # Example: http://localhost:8082/extracted-images/image_xxx.png
+  static-files:
+    image: nginx:alpine
+    hostname: static-files
+    container_name: static-files
+    restart: unless-stopped
+    expose:
+      - 8082/tcp
+    volumes:
+      - ./shared/extracted-images:/usr/share/nginx/html:ro
+    command: |
+      sh -c "echo 'server {
+        listen 80;
+        root /usr/share/nginx/html;
+        index chat.html;
+        autoindex on;
+        location / {
+          try_files \$$uri \$$uri/ =404;
+          add_header Access-Control-Allow-Origin *;
+        }
+      }' > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+  # ===========================================
+
+  docling:
+    <<: *service-docling
+  
+
   # I added these but don't use them
-  # unstract:
-  #   image: unstract/backend:latest
-  #   container_name: unstract
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8020:8000" # Access Unstract API at http://localhost:8020
-  #   tty: true
-  #   # Add environment variables or volumes here if needed
-  #   environment:
-  #   # - UNSTRACT_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
-  #   - DB_NAME=postgres
-  #   - DB_USER=postgres
-  #   - DB_HOST=postgres
-  #   - DB_PASSWORD=${POSTGRES_PASSWORD}
-  #   - DB_PORT=5432
-  #   - DB_SCHEMA=public
-  #   - UNSTRACT_SECRET_KEY=xy*1J3B7
-  #   - UNSTRACT_ALLOWED_ORIGINS=*
-  #   - UNSTRACT_LOG_LEVEL=INFO
-  #   - CELERY_BROKER_BASE_URL=redis://redis:6379/0
-  #   - INDEXING_FLAG_TTL=1800
-  #   - CELERY_BROKER_USER=guest
-  #   - CELERY_BROKER_PASS=guest
-  #   - STRUCTURE_TOOL_IMAGE_URL=downloads.unstructured.io/unstructured-io/unstructured:latest
-  #   - STRUCTURE_TOOL_IMAGE_NAME=unstructured
-  #   - STRUCTURE_TOOL_IMAGE_TAG=latest
-  #   - SYSTEM_ADMIN_USERNAME=admin
-  #   - SYSTEM_ADMIN_PASSWORD=adminpassword
-  #   - SYSTEM_ADMIN_EMAIL=admin@example.com
-  #   - ENABLE_LOG_HISTORY=True
-  #   - DJANGO_SECRET_KEY=l5y5FkZ_WmmzhCzMBF_ZxW4ioYCGrVqM9aS6IE-_KIvHgUMSvCe7YTlsq2pObCrOk8o
-  #   - ENCRYPTION_KEY=ih6rnPiaTU3f4VZ3Wl0CBdfyx2CJKWqilqPu8ySpMQs=
-  #   volumes:
-  #     - ./unstract-data:/var/lib/unstract/data
+    # unstract:
+    #   image: unstract/backend:latest
+    #   container_name: unstract
+    #   restart: unless-stopped
+    #   ports:
+    #     - "8020:8000" # Access Unstract API at http://localhost:8020
+    #   tty: true
+    #   # Add environment variables or volumes here if needed
+    #   environment:
+    #   # - UNSTRACT_DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
+    #   - DB_NAME=postgres
+    #   - DB_USER=postgres
+    #   - DB_HOST=postgres
+    #   - DB_PASSWORD=${POSTGRES_PASSWORD}
+    #   - DB_PORT=5432
+    #   - DB_SCHEMA=public
+    #   - UNSTRACT_SECRET_KEY=xy*1J3B7
+    #   - UNSTRACT_ALLOWED_ORIGINS=*
+    #   - UNSTRACT_LOG_LEVEL=INFO
+    #   - CELERY_BROKER_BASE_URL=redis://redis:6379/0
+    #   - INDEXING_FLAG_TTL=1800
+    #   - CELERY_BROKER_USER=guest
+    #   - CELERY_BROKER_PASS=guest
+    #   - STRUCTURE_TOOL_IMAGE_URL=downloads.unstructured.io/unstructured-io/unstructured:latest
+    #   - STRUCTURE_TOOL_IMAGE_NAME=unstructured
+    #   - STRUCTURE_TOOL_IMAGE_TAG=latest
+    #   - SYSTEM_ADMIN_USERNAME=admin
+    #   - SYSTEM_ADMIN_PASSWORD=adminpassword
+    #   - SYSTEM_ADMIN_EMAIL=admin@example.com
+    #   - ENABLE_LOG_HISTORY=True
+    #   - DJANGO_SECRET_KEY=l5y5FkZ_WmmzhCzMBF_ZxW4ioYCGrVqM9aS6IE-_KIvHgUMSvCe7YTlsq2pObCrOk8o
+    #   - ENCRYPTION_KEY=ih6rnPiaTU3f4VZ3Wl0CBdfyx2CJKWqilqPu8ySpMQs=
+    #   volumes:
+    #     - ./unstract-data:/var/lib/unstract/data
 
-  # unstract-frontend:
-  #   image: unstract/frontend:latest
-  #   container_name: unstract-frontend
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8021:80" # Access Unstract Frontend at http://localhost:8021
-  #   depends_on:
-  #     - unstract
-  #   # Add environment variables or volumes here if needed
-  #   environment:
-  #     - VITE_UNSTRACT_API_URL=http://localhost:8020
+    # unstract-frontend:
+    #   image: unstract/frontend:latest
+    #   container_name: unstract-frontend
+    #   restart: unless-stopped
+    #   ports:
+    #     - "8021:80" # Access Unstract Frontend at http://localhost:8021
+    #   depends_on:
+    #     - unstract
+    #   # Add environment variables or volumes here if needed
+    #   environment:
+    #     - VITE_UNSTRACT_API_URL=http://localhost:8020
 
-  # unstructured:
-  #   image: downloads.unstructured.io/unstructured-io/unstructured:latest
-  #   platform: linux/arm64
-  #   container_name: unstructured
-  #   restart: unless-stopped
-  #   tty: true
-  #   ports:
-  #     - "8010:8000" # Access Unstructured API at http://localhost:8000
-  #   # environment:
-  #     # Optional: set log level or other variables
-  #     # LOG_LEVEL: "DEBUG"
-  #   volumes:
-  #     # Uncomment if you want to persist data or mount files
-  #     - ./unstructured-data:/var/lib/unstructured/data
+    # unstructured:
+    #   image: downloads.unstructured.io/unstructured-io/unstructured:latest
+    #   platform: linux/arm64
+    #   container_name: unstructured
+    #   restart: unless-stopped
+    #   tty: true
+    #   ports:
+    #     - "8010:8000" # Access Unstructured API at http://localhost:8000
+    #   # environment:
+    #     # Optional: set log level or other variables
+    #     # LOG_LEVEL: "DEBUG"
+    #   volumes:
+    #     # Uncomment if you want to persist data or mount files
+    #     - ./unstructured-data:/var/lib/unstructured/data
+  # ===========================================
 
   ollama-cpu:
     profiles: ["cpu"]
